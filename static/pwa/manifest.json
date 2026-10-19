@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "M G Fibernet Customer Portal",
+  "short_name": "MG Fibernet",
+  "description": "Manage your M G Fibernet connection and support tickets.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f8fa",
+  "theme_color": "#12334a",
+  "orientation": "portrait-primary",
+  "icons": [
+    {"src": "/static/pwa/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/static/pwa/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
