@@ -1,13 +1,39 @@
 from django.conf import settings
 from django.db import models
 
-class CustomerProfile(models.Model):
-    """Optional customer details linked to a Django account."""
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="customer_profile")
-    customer_id = models.CharField(max_length=40, unique=True)
-    mobile_number = models.CharField(max_length=20, blank=True)
-    service_address = models.TextField(blank=True)
-    def __str__(self): return f"{self.customer_id} - {self.user.get_username()}"
+class UserProfile(models.Model):
+    """Consolidated user profile for both customers and employees."""
+    ROLES = [("customer", "Customer"), ("employee", "Employee")]
+    DEPARTMENTS = [
+        ("complaints", "Complaints"), ("new_connection", "New connection"),
+        ("dish", "Dish complaints"), ("main_line", "Main line complaints"),
+        ("airtel_fiber", "Airtel fiber cuts"), ("renewal", "Renewal / billing"),
+    ]
+    
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="profile")
+    role = models.CharField(max_length=20, choices=ROLES, default="customer")
+    
+    # Customer-specific fields
+    customer_id = models.CharField(max_length=40, unique=True, null=True, blank=True, help_text="Unique customer ID for customers")
+    service_address = models.TextField(blank=True, help_text="Service address for customers")
+    
+    # Employee-specific fields
+    department = models.CharField(max_length=30, choices=DEPARTMENTS, blank=True, help_text="Department for employees")
+    
+    # Common fields
+    mobile_number = models.CharField(max_length=20, blank=True, help_text="Mobile number for contact")
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "User Profile"
+        verbose_name_plural = "User Profiles"
+    
+    def __str__(self):
+        if self.role == "customer":
+            return f"{self.customer_id or self.user.username} (Customer)"
+        return f"{self.user.username} ({self.role} - {self.department or 'No Dept'})"
 
 class Complaint(models.Model):
     CATEGORIES = [
@@ -52,22 +78,8 @@ class CallbackRequest(models.Model):
     def __str__(self): return f"Callback #{self.pk} - {self.mobile_number}"
 
 
-class UserProfile(models.Model):
-    ROLES = [("customer", "Customer"), ("employee", "Employee")]
-    DEPARTMENTS = [
-        ("complaints", "Complaints"), ("new_connection", "New connection"),
-        ("dish", "Dish complaints"), ("main_line", "Main line complaints"),
-        ("airtel_fiber", "Airtel fiber cuts"), ("renewal", "Renewal / billing"),
-    ]
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="mg_profile")
-    role = models.CharField(max_length=20, choices=ROLES, default="customer")
-    department = models.CharField(max_length=30, choices=DEPARTMENTS, blank=True)
-    mobile_number = models.CharField(max_length=20, blank=True)
-    def __str__(self): return f"{self.user.get_username()} ({self.role})"
-
-
 class Notification(models.Model):
-    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="mg_notifications")
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="notifications")
     complaint = models.ForeignKey(Complaint, on_delete=models.CASCADE, null=True, blank=True, related_name="notifications")
     title = models.CharField(max_length=160)
     message = models.TextField()
@@ -75,6 +87,8 @@ class Notification(models.Model):
     read_at = models.DateTimeField(null=True, blank=True)
     class Meta:
         ordering = ["-created_at"]
+        verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
     def __str__(self): return f"{self.recipient}: {self.title}"
 
 
@@ -86,4 +100,6 @@ class TicketActivity(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         ordering = ["-created_at"]
+        verbose_name = "Ticket Activity"
+        verbose_name_plural = "Ticket Activities"
     def __str__(self): return f"Ticket #{self.complaint_id}: {self.action}"

@@ -19,4 +19,6 @@ urlpatterns = [
     path("complaints/", views.my_complaints, name="my_complaints"),
     path("plans/", views.plans, name="plans"),
     path("plans/<int:plan_id>/callback/", views.request_callback, name="request_callback"),
+    path("no-users/", views.no_users, name="no_users"),
+    path("create-user/", views.create_user, name="create_user"),
 ]

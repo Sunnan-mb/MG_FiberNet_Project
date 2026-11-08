@@ -7,8 +7,8 @@ from django.db.models import Q
 from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-from .forms import CustomerLoginForm, ComplaintForm, CallbackRequestForm
-from .models import Complaint, Plan, Notification, TicketActivity, UserProfile, CustomerProfile
+from .forms import CustomerLoginForm, ComplaintForm, CallbackRequestForm, UserCreationForm, UserProfileCreationForm
+from .models import Complaint, Plan, Notification, TicketActivity, UserProfile
 
 User = get_user_model()
 
@@ -22,7 +22,7 @@ class CustomerLoginView(LoginView):
 
 def profile_role(user):
     if user.is_superuser or user.is_staff: return "admin"
-    try: return user.mg_profile.role
+    try: return user.profile.role
     except UserProfile.DoesNotExist: return "customer"
 
 def employee_required(view):
@@ -42,12 +42,12 @@ def notify_users(users, complaint, title, message):
 def administrators(): return User.objects.filter(Q(is_active=True) & (Q(is_staff=True) | Q(is_superuser=True))).distinct()
 def employees_for_department(category):
     # All employee accounts are notified; department routing can be refined by mapping category to department.
-    return User.objects.filter(is_active=True, mg_profile__role="employee")
+    return User.objects.filter(is_active=True, profile__role="employee")
 
 @customer_required
 def customer_dashboard(request):
     complaints = Complaint.objects.filter(customer=request.user).select_related("assigned_to").order_by("-created_at")[:8]
-    return render(request, "portal/customer_dashboard.html", {"complaints": complaints, "open_count": Complaint.objects.filter(customer=request.user).exclude(status__in=["resolved", "closed"]).count(), "notifications": request.user.mg_notifications.filter(read_at__isnull=True)[:5]})
+    return render(request, "portal/customer_dashboard.html", {"complaints": complaints, "open_count": Complaint.objects.filter(customer=request.user).exclude(status__in=["resolved", "closed"]).count(), "notifications": request.user.notifications.filter(read_at__isnull=True)[:5]})
 
 @customer_required
 def raise_complaint(request):
@@ -84,9 +84,22 @@ def request_callback(request, plan_id):
 
 @employee_required
 def employee_dashboard(request):
+    status_filter = request.GET.get('status', 'all')
     tickets = Complaint.objects.select_related("customer", "assigned_to").order_by("created_at")
-    if profile_role(request.user) != "admin": tickets = tickets.filter(Q(assigned_to=request.user) | Q(assigned_to__isnull=True))
-    return render(request, "portal/employee_dashboard.html", {"tickets": tickets, "pending_count": tickets.exclude(status__in=["resolved", "closed"]).count(), "notifications": request.user.mg_notifications.filter(read_at__isnull=True)[:10]})
+    
+    if profile_role(request.user) != "admin": 
+        tickets = tickets.filter(Q(assigned_to=request.user) | Q(assigned_to__isnull=True))
+    
+    if status_filter != 'all':
+        tickets = tickets.filter(status=status_filter)
+    
+    return render(request, "portal/employee_dashboard.html", {
+        "tickets": tickets,
+        "pending_count": tickets.exclude(status__in=["resolved", "closed"]).count(),
+        "notifications": request.user.notifications.filter(read_at__isnull=True)[:10],
+        "current_status": status_filter,
+        "statuses": Complaint.STATUSES
+    })
 
 @employee_required
 def ticket_detail(request, ticket_id):
@@ -121,23 +134,96 @@ def ticket_detail(request, ticket_id):
         notify_users(administrators(), ticket, f"Ticket #{ticket.pk} updated", f"{request.user.get_username()} changed ticket status to {ticket.get_status_display()}.")
         messages.success(request, "Ticket updated and notifications sent.")
         return redirect("ticket_detail", ticket_id=ticket.pk)
-    return render(request, "portal/ticket_detail.html", {"ticket": ticket, "employees": User.objects.filter(is_active=True, mg_profile__role="employee").order_by("username"), "activities": ticket.activities.select_related("actor")})
+    return render(request, "portal/ticket_detail.html", {"ticket": ticket, "employees": User.objects.filter(is_active=True, profile__role="employee").order_by("username"), "activities": ticket.activities.select_related("actor")})
 
 @admin_required
 def admin_dashboard(request):
+    status_filter = request.GET.get('status', 'all')
     tickets = Complaint.objects.select_related("customer", "assigned_to").order_by("-created_at")
-    return render(request, "portal/admin_dashboard.html", {"tickets": tickets, "total": tickets.count(), "open_count": tickets.exclude(status__in=["resolved", "closed"]).count(), "employees": User.objects.filter(mg_profile__role="employee").count(), "customers": User.objects.filter(mg_profile__role="customer").count(), "notifications": Notification.objects.select_related("recipient", "complaint").order_by("-created_at")[:25]})
+    
+    if status_filter != 'all':
+        tickets = tickets.filter(status=status_filter)
+    
+    return render(request, "portal/admin_dashboard.html", {
+        "tickets": tickets,
+        "total": Complaint.objects.count(),
+        "open_count": Complaint.objects.exclude(status__in=["resolved", "closed"]).count(),
+        "employees": User.objects.filter(profile__role="employee").count(),
+        "customers": User.objects.filter(profile__role="customer").count(),
+        "notifications": Notification.objects.select_related("recipient", "complaint").order_by("-created_at")[:25],
+        "current_status": status_filter,
+        "statuses": Complaint.STATUSES
+    })
 
 @login_required
 def notifications(request):
-    items = request.user.mg_notifications.select_related("complaint").all()[:100]
+    items = request.user.notifications.select_related("complaint").all()[:100]
     if request.method == "POST":
-        request.user.mg_notifications.filter(read_at__isnull=True).update(read_at=timezone.now())
+        request.user.notifications.filter(read_at__isnull=True).update(read_at=timezone.now())
         return redirect("notifications")
     return render(request, "portal/notifications.html", {"items": items})
 
 def logout_view(request):
     logout(request); return redirect("login")
+
+def no_users(request):
+    return render(request, "portal/no_users.html")
+
+def create_user(request):
+    if request.method == "POST":
+        user_type = request.POST.get("user_type")
+        user_form = UserCreationForm(request.POST)
+        
+        if user_form.is_valid():
+            password = user_form.cleaned_data.get("password")
+            user = user_form.save(commit=False)
+            user.set_password(password)
+            user.is_active = True
+            user.save()
+            
+            if user_type == "customer":
+                profile_form = UserProfileCreationForm(request.POST)
+                if profile_form.is_valid():
+                    # Auto-generate customer_id: MG-username-001, MG-username-002, etc.
+                    base_id = f"MG-{user.username}"
+                    count = UserProfile.objects.filter(customer_id__startswith=base_id).count()
+                    customer_id = f"{base_id}-{str(count + 1).zfill(3)}"
+                    
+                    # Create UserProfile with customer data
+                    profile = profile_form.save(commit=False)
+                    profile.user = user
+                    profile.role = "customer"
+                    profile.customer_id = customer_id
+                    profile.service_address = request.POST.get('service_address', '')
+                    profile.mobile_number = request.POST.get('mobile_number', '')
+                    profile.save()
+                    
+                    messages.success(request, f"Customer {user.username} created successfully! Customer ID: {customer_id}")
+                    return redirect("admin_dashboard")
+                else:
+                    user.delete()
+                    messages.error(request, "Error creating customer profile. Please check the form.")
+            elif user_type == "employee":
+                profile_form = UserProfileCreationForm(request.POST)
+                if profile_form.is_valid():
+                    profile = profile_form.save(commit=False)
+                    profile.user = user
+                    profile.role = "employee"
+                    profile.save()
+                    messages.success(request, f"Employee {user.username} created successfully!")
+                    return redirect("admin_dashboard")
+                else:
+                    user.delete()
+                    messages.error(request, "Error creating employee profile. Please check the form.")
+        else:
+            messages.error(request, "Error creating user. Please check the form.")
+    else:
+        user_form = UserCreationForm()
+    
+    return render(request, "portal/create_user.html", {
+        "user_form": user_form,
+        "profile_form": UserProfileCreationForm(),
+    })
 
 # Local development OTP only: a real SMS gateway must be configured before launch.
 def otp_request(request):
@@ -153,7 +239,7 @@ def otp_verify(request):
     if request.method == "POST":
         code = request.POST.get("otp", "").strip()
         if code and code == request.session.get("demo_otp"):
-            mobile = request.session.get("demo_otp_mobile"); profile = CustomerProfile.objects.filter(mobile_number=mobile).select_related("user").first()
+            mobile = request.session.get("demo_otp_mobile"); profile = UserProfile.objects.filter(mobile_number=mobile, role="customer").select_related("user").first()
             user = profile.user if profile else User.objects.filter(username=mobile).first()
             if user and user.is_active:
                 login(request, user, backend="django.contrib.auth.backends.ModelBackend"); request.session.pop("demo_otp", None); request.session.pop("demo_otp_mobile", None); return redirect("customer_dashboard")
